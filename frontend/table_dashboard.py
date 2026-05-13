@@ -161,10 +161,14 @@ def load_season_data(season: int) -> pd.DataFrame:
 
 
 def _fill_missing_columns(df: pd.DataFrame, season: int) -> pd.DataFrame:
-    """Fill / map derived columns needed by the table."""
+    """
+    Fill / map derived columns needed by the table.
+    Handles both FanGraphs-style names (Barrel%, HardHit%, Pull%, etc.)
+    and lowercase/underscore names so 2025 and 2026 both display correctly.
+    """
     df = df.copy()
 
-    # Player name
+    # ── Player name ────────────────────────────────────────────────────
     for col in ["last_name, first_name", "Name", "name"]:
         if col in df.columns and df[col].notna().any():
             df["name"] = df[col]
@@ -173,69 +177,99 @@ def _fill_missing_columns(df: pd.DataFrame, season: int) -> pd.DataFrame:
         df["name"] = "Unknown"
     df["name"] = df["name"].fillna("Unknown")
 
-    # xwOBA
+    # ── Expected stats ─────────────────────────────────────────────────
     for col in ["est_woba", "xwoba", "xwOBA"]:
         if col in df.columns and df[col].notna().any():
-            df["xwoba"] = df[col]
-            break
-    # xBA / xSLG
-    for src, dst in [("est_ba", "xba"), ("est_slg", "xslg")]:
-        if src in df.columns and dst not in df.columns:
+            df["xwoba"] = df[col]; break
+    for src, dst in [("est_ba","xba"), ("est_slg","xslg")]:
+        if src in df.columns and (dst not in df.columns or df[dst].isna().all()):
             df[dst] = df[src]
-    # xISO
-    if "xiso" not in df.columns and "xslg" in df.columns and "xba" in df.columns:
-        df["xiso"] = df["xslg"] - df["xba"]
+    if "xiso" not in df.columns or df["xiso"].isna().all():
+        if "xslg" in df.columns and "xba" in df.columns:
+            df["xiso"] = (df["xslg"] - df["xba"]).round(3)
 
-    # BA
-    if "ba" not in df.columns:
-        if "BA" in df.columns:
-            df["ba"] = df["BA"]
-        elif "H" in df.columns and "AB" in df.columns:
+    # ── Contact quality (FanGraphs names → standard names) ────────────
+    # Barrel%
+    if df.get("barrel_batted_rate", pd.Series()).isna().all():
+        for alt in ["Barrel%", "barrel_percent"]:
+            if alt in df.columns and df[alt].notna().any():
+                df["barrel_batted_rate"] = df[alt]; break
+    # HardHit%
+    if df.get("hard_hit_percent", pd.Series()).isna().all():
+        for alt in ["HardHit%", "Hard%"]:
+            if alt in df.columns and df[alt].notna().any():
+                df["hard_hit_percent"] = df[alt]; break
+    # Exit Velo
+    if "avg_exit_velocity" not in df.columns or df["avg_exit_velocity"].isna().all():
+        for alt in ["exit_velocity", "launch_speed", "avg_hit_speed"]:
+            if alt in df.columns and df[alt].notna().any():
+                df["avg_exit_velocity"] = df[alt]; break
+
+    # ── Plate discipline (FanGraphs → standard) ────────────────────────
+    for fg, std in [("BB%","bb_percent"), ("K%","k_percent"),
+                    ("O-Swing%","o_swing_percent"), ("Z-Contact%","z_contact_percent"),
+                    ("Contact%","contact_percent")]:
+        if std not in df.columns or df[std].isna().all():
+            if fg in df.columns and df[fg].notna().any():
+                df[std] = df[fg]
+
+    # ── Batted ball profile (FanGraphs → standard) ─────────────────────
+    for fg, std in [("GB%","gb_percent"), ("FB%","fb_percent"), ("LD%","ld_percent"),
+                    ("Pull%","pull_percent"), ("Oppo%","oppo_percent")]:
+        if std not in df.columns or df[std].isna().all():
+            if fg in df.columns and df[fg].notna().any():
+                df[std] = df[fg]
+
+    # ── Run production ─────────────────────────────────────────────────
+    for fg, std in [("wRC+","wrc_plus"), ("WAR","war")]:
+        if std not in df.columns or df[std].isna().all():
+            if fg in df.columns and df[fg].notna().any():
+                df[std] = df[fg]
+
+    # ── Counting stats (uppercase → lowercase) ──────────────────────────
+    for upper, lower in [("AB","ab"),("H","h"),("R","r"),("RBI","rbi"),
+                          ("HR","hr"),("BB","bb"),("OBP","obp"),
+                          ("SLG","slg"),("ISO","iso"),("OPS","ops"),
+                          ("BABIP","babip"),("WAR","war")]:
+        if lower not in df.columns or df[lower].isna().all():
+            if upper in df.columns and df[upper].notna().any():
+                df[lower] = df[upper]
+
+    # BA (various sources)
+    if "ba" not in df.columns or df["ba"].isna().all():
+        for alt in ["BA", "BA_bref"]:
+            if alt in df.columns and df[alt].notna().any():
+                df["ba"] = df[alt]; break
+        if ("ba" not in df.columns or df["ba"].isna().all()) and "H" in df.columns and "AB" in df.columns:
             df["ba"] = (df["H"] / df["AB"].replace(0, np.nan)).round(3)
 
-    # Salary column (season-specific)
-    salary_col = f"salary_{season}"
-    if salary_col not in df.columns:
-        for alt in [f"salary_{season}_x", "salary_2025", "salary_2025_x", "salary"]:
-            if alt in df.columns and df[alt].notna().any():
-                df[salary_col] = df[alt]
-                break
-    # Unify to 'salary_display' for table
-    df["salary_display"] = df.get(salary_col, pd.Series(np.nan, index=df.index))
+    # K (strikeouts) — prefer SO over the sparsely-populated K column
+    if "k" not in df.columns or df["k"].isna().sum() > len(df) * 0.5:
+        for alt in ["SO", "K", "so", "k_bref"]:
+            if alt in df.columns and df[alt].notna().sum() > df.get("k", pd.Series()).notna().sum():
+                df["k"] = df[alt]; break
 
     # xHR
-    for col in ["est_hr", "xHR", "xhr"]:
-        if col in df.columns:
-            df["xhr"] = df[col]
-            break
-
-    # WAR/$1M
-    if "war_per_salary" not in df.columns:
-        war = df.get("WAR", df.get("war"))
-        sal = df.get(salary_col)
-        if war is not None and sal is not None:
-            valid = sal.notna() & (sal > 0)
-            df["war_per_salary"] = np.where(valid, war / (sal + 0.1), np.nan)
-
-    # Lowercase counting stats
-    for upper, lower in [("AB","ab"),("H","h"),("R","r"),("RBI","rbi"),
-                          ("HR","hr"),("BB","bb"),("K","k"),("OBP","obp"),
-                          ("SLG","slg"),("ISO","iso"),("OPS","ops"),
-                          ("BABIP","babip"),("BA","ba"),("WAR","war")]:
-        if lower not in df.columns and upper in df.columns:
-            df[lower] = df[upper]
-    # K fallback to SO
-    if "k" not in df.columns or df["k"].isna().all():
-        for alt in ["K","SO","so","Strikes"]:
+    if "xhr" not in df.columns or df["xhr"].isna().all():
+        for alt in ["est_hr", "xHR"]:
             if alt in df.columns and df[alt].notna().any():
-                df["k"] = df[alt]
-                break
+                df["xhr"] = df[alt]; break
 
-    # wRC+
-    for col in ["wRC+", "wrc_plus", "wRCplus"]:
-        if col in df.columns:
-            df["wrc_plus"] = df[col]
-            break
+    # ── Salary column ──────────────────────────────────────────────────
+    salary_col = f"salary_{season}"
+    if salary_col not in df.columns or df[salary_col].isna().all():
+        for alt in [f"salary_{season}_x", "salary_2025", "salary_2025_x", "salary"]:
+            if alt in df.columns and df[alt].notna().any():
+                df[salary_col] = df[alt]; break
+    df["salary_display"] = df.get(salary_col, pd.Series(np.nan, index=df.index))
+
+    # ── WAR / $1M ──────────────────────────────────────────────────────
+    if "war_per_salary" not in df.columns or df["war_per_salary"].isna().all():
+        war_s = df.get("war", df.get("WAR"))
+        sal_s = df.get(salary_col)
+        if war_s is not None and sal_s is not None:
+            valid = sal_s.notna() & (sal_s > 0) & war_s.notna()
+            df["war_per_salary"] = np.where(valid, war_s / (sal_s + 0.1), np.nan)
 
     return df
 
@@ -741,12 +775,12 @@ def update_main_content(top_n, active_tab, season, search_query):
 
 def _about_content(season: int):
     if season == CURRENT_SEASON:
-        intro = html.Div([
+        return dbc.Container([dbc.Row([dbc.Col([dbc.Card([dbc.CardBody([
             html.P([
                 "Welcome to the ", html.Strong("2026 Live Season"), " view. This dashboard tracks every MLB "
                 "hitter in real time as the 2026 season unfolds. Unlike the 2025 full-season benchmark, "
-                "live rankings use ", html.Strong("sample-size-aware scoring"), " so small early-season "
-                "samples don't distort the leaderboard."
+                "live rankings use ", html.Strong("sample-size-aware scoring"),
+                " so small early-season samples don't distort the leaderboard."
             ], style={"fontSize": "16px", "lineHeight": "1.8", "marginBottom": "20px"}),
             dbc.Alert([
                 html.Strong("Live-season scores are sample-size adjusted and regressed toward league "
@@ -756,48 +790,82 @@ def _about_content(season: int):
             ], color="info", className="mb-4"),
             html.P([
                 "As the season progresses and PA accumulate, the reliability weight (w) approaches 1 and the "
-                "adjusted score converges to the raw UVS. At 120 PA, the score is 50% reliable; at 350 PA "
-                "(the qualifying threshold used in 2025), it reaches ~74% reliability."
+                "adjusted score converges to the raw UVS. At 120 PA the score is 50% reliable; at 350 PA "
+                "(the qualifying threshold used in 2025) it reaches ~74% reliability."
             ], style={"fontSize": "15px", "lineHeight": "1.8", "marginBottom": "20px"}),
-        ])
-    else:
-        intro = html.Div([
             html.P([
-                "This website examines all 350 hitters from the 2025 MLB regular season with at least 200 "
-                "plate appearances. Statistics include both traditional and advanced metrics — Hard Hit%, "
-                "xwOBA, LD%, and more — explained in the Metrics Glossary above."
-            ], style={"fontSize": "16px", "lineHeight": "1.8", "marginBottom": "20px"}),
-        ])
+                "Using advanced statistics, the ", html.Strong("Undervaluation Score (UVS)"),
+                " identifies hitters whose underlying performance — expected metrics, contact quality, "
+                "and efficiency — exceeds their surface stats and salary."
+            ], style={"fontSize": "16px", "lineHeight": "1.8", "marginBottom": "15px"}),
+            html.P([html.Strong("UVS = 0.25·EPI + 0.20·CQI + 0.15·PDI + 0.15·RPI + 0.10·SE + 0.10·LA")],
+                   style={"fontFamily": "monospace", "fontSize": "14px",
+                          "backgroundColor": "#f0f0f0", "padding": "12px",
+                          "borderRadius": "6px"}),
+        ])], className="mb-4")], width=10, className="mx-auto")])], fluid=True)
 
-    shared = html.Div([
-        html.P([
-            "Using advanced statistics, the ", html.Strong("Undervaluation Score (UVS)"),
-            " identifies hitters whose underlying performance — expected metrics, contact quality, "
-            "and efficiency — exceeds their surface stats and salary."
-        ], style={"fontSize": "16px", "lineHeight": "1.8", "marginBottom": "15px"}),
-        html.P([html.Strong("UVS rewards:")],
-               style={"fontSize": "16px", "marginBottom": "8px"}),
-        html.Ul([
-            html.Li("Great expected performance (xwOBA, xSLG, xBA)"),
-            html.Li("Strong plate discipline and contact quality"),
-            html.Li("High WAR per $1M of salary"),
-            html.Li("Positive luck differential (expected > actual outcomes)"),
-            html.Li("Strong run creation (wRC+)"),
-        ], style={"fontSize": "15px", "lineHeight": "1.9", "marginLeft": "20px",
-                   "marginBottom": "25px"}),
+    # ── 2025 About — exact original text ──────────────────────────────
+    p = {"fontSize": "16px", "lineHeight": "1.8", "marginBottom": "25px"}
+    return dbc.Container([dbc.Row([dbc.Col([dbc.Card([dbc.CardBody([html.Div([
+
         html.P(
-            "UVS = 0.25·EPI + 0.20·CQI + 0.15·PDI + 0.15·RPI + 0.10·SE + 0.10·LA",
-            style={"fontFamily": "monospace", "fontSize": "14px",
-                   "backgroundColor": "#f0f0f0", "padding": "12px",
-                   "borderRadius": "6px", "marginBottom": "20px"},
+            "This website examines all the 350 hitters during the 2025 MLB regular season that had a "
+            "good enough sample size with at least 200 plate appearances. However, this page doesn't "
+            "just include the basic statistics of these players as most of the statistics are advanced "
+            "statistics, like Hard Hit% and LD%. Additionally, expected performance is also tracked "
+            "with statistics like wOBA and xSLG that are explained on the next tab in the metrics "
+            "glossary.",
+            style=p,
         ),
-    ])
 
-    return dbc.Container([
-        dbc.Row([dbc.Col([
-            dbc.Card([dbc.CardBody([intro, shared])], className="mb-4")
-        ], width=10, className="mx-auto")])
-    ], fluid=True)
+        html.P([
+            "Using those advanced statistics, I came up with a formula to find the most undervalued "
+            "hitters in the 2025 regular season. A player is undervalued when their underlying "
+            "performance, meaning their expected metrics, quality of contact, and efficiency, is "
+            "better than their surface stats and salary. ",
+            html.Strong("As a result, this undervaluation score (UVS) formula rewards:"),
+        ], style={**p, "marginBottom": "15px"}),
+
+        html.Ul([
+            html.Li("Great expected performance"),
+            html.Li("Strong plate discipline and contact quality"),
+            html.Li("High WAR per $1M"),
+            html.Li("Positive luck differential"),
+            html.Li("Strong run creation"),
+            html.Li("Moderate to low salary or small market exposure"),
+        ], style={"fontSize": "16px", "lineHeight": "1.8", "marginBottom": "25px",
+                  "marginLeft": "20px"}),
+
+        html.P(
+            "There are 7 indexes created that go into the final UVS calculation which is seen on the "
+            "third tab titled \"Undervalued Players.\" Each index consists of a collection of both "
+            "advanced and basic metrics seen in the metrics glossary. However, not each of those "
+            "indexes are weighted the same. Due to the main goal being finding undervalued performance, "
+            "an expected performance index is weighted the most to find out which hitters have been "
+            "unlucky. Then, a contact quality index is weighted the second highest followed by a plate "
+            "discipline index and a run production index. The plate discipline index is weighted "
+            "slightly more than the run production index because another aim of this formula is to "
+            "predict future performance and plate discipline is a stronger predictor of future "
+            "performance, while run production mostly measures past results. Then, a salary efficiency "
+            "index is included to see their efficiency per $1M before a luck adjustment index "
+            "concludes the final dynamic of the formula, to see how unlucky a player has been with "
+            "their balls.",
+            style=p,
+        ),
+
+        html.P(
+            "Overall, this website aims to provide MLB fans an easily accessible source to see a "
+            "bunch of basic and advanced metrics on hitters with a solid sample size during the 2025 "
+            "regular season. All this is set up for the primary goal of this website, which is to "
+            "rank how undervalued all 350 hitters with at least 200 plate appearances were. From "
+            "this, users can learn new names of players who weren't talked about enough this past "
+            "year and keep an eye out for them becoming possible stars/superstars in the coming "
+            "years. From the ranking, users can also gain a deeper appreciation for the greatness of "
+            "already well-recognized superstars!",
+            style={**p, "marginBottom": "0"},
+        ),
+
+    ])]) ], className="mb-4")], width=10, className="mx-auto")])], fluid=True)
 
 
 def _all_players_tab(df: pd.DataFrame, season: int):

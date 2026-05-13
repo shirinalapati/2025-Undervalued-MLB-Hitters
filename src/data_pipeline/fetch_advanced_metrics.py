@@ -37,12 +37,15 @@ DATA_RAW = PROJECT_ROOT / "data" / "raw"
 DATA_PROCESSED = PROJECT_ROOT / "data" / "processed"
 
 
-def fetch_comprehensive_batting_stats(year: int = 2025) -> pd.DataFrame:
+def fetch_comprehensive_batting_stats(year: int = 2025, min_pa: int = 200) -> pd.DataFrame:
     """
     Fetch comprehensive batting statistics including all advanced metrics.
     
     Args:
         year: Season year
+        min_pa: Minimum plate appearances to include (default 200 for full-season;
+                pass a lower value like 10 for live-season mode where reliability
+                weighting handles small-sample noise).
         
     Returns:
         DataFrame with comprehensive batting metrics
@@ -51,12 +54,12 @@ def fetch_comprehensive_batting_stats(year: int = 2025) -> pd.DataFrame:
         logger.error("pybaseball not available")
         return pd.DataFrame()
     
-    logger.info(f"Fetching comprehensive batting stats for {year}...")
+    logger.info(f"Fetching comprehensive batting stats for {year} (min_pa={min_pa})...")
     
     try:
         # Fetch Statcast expected stats leaderboard (has xwOBA, xBA, etc.)
-        # Note: minPA parameter doesn't filter results, just sets minimum for expected stats calculation
-        df = pyb.statcast_batter_expected_stats(year, minPA=200)
+        # minPA=1 so pybaseball returns all batters; we apply our own PA floor below.
+        df = pyb.statcast_batter_expected_stats(year, minPA=1)
         
         if df is None or df.empty:
             logger.warning(f"No Statcast batting data for {year}")
@@ -64,16 +67,16 @@ def fetch_comprehensive_batting_stats(year: int = 2025) -> pd.DataFrame:
         
         logger.info(f"Fetched {len(df)} hitters from Statcast expected stats")
         
-        # Actually filter to 200+ PA (minPA parameter doesn't filter the results)
+        # Apply configurable PA floor
         if 'pa' in df.columns:
             before_filter = len(df)
-            df = df[df['pa'] >= 200]
-            logger.info(f"Filtered Statcast data: {before_filter} -> {len(df)} players with >= 200 PA")
+            df = df[df['pa'] >= min_pa]
+            logger.info(f"Filtered Statcast data: {before_filter} -> {len(df)} players with >= {min_pa} PA")
         
         # Fetch FanGraphs data for WAR, wRC+, and quality of contact metrics
         try:
-            # Filter: Minimum 200 plate appearances
-            fg_batting = pyb.batting_stats(year, qual=200)
+            # Use the same PA floor for FanGraphs (qual=0 lets all players through)
+            fg_batting = pyb.batting_stats(year, qual=min_pa if min_pa > 1 else 0)
             if fg_batting is not None and not fg_batting.empty:
                 logger.info(f"Fetched {len(fg_batting)} hitters from FanGraphs")
                 
@@ -371,12 +374,14 @@ def calculate_batted_ball_percentages(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def combine_all_data(year: int = 2025) -> pd.DataFrame:
+def combine_all_data(year: int = 2025, min_pa: int = 200) -> pd.DataFrame:
     """
     Combine all data sources into a unified dataset.
     
     Args:
         year: Season year
+        min_pa: Minimum plate appearances for hitters (200 for full season,
+                lower for live-season mode).
         
     Returns:
         Combined DataFrame with all metrics
@@ -384,7 +389,7 @@ def combine_all_data(year: int = 2025) -> pd.DataFrame:
     logger.info("Combining all data sources...")
     
     # Fetch all data
-    batting = fetch_comprehensive_batting_stats(year)
+    batting = fetch_comprehensive_batting_stats(year, min_pa=min_pa)
     pitching = fetch_comprehensive_pitching_stats(year)
     salary = fetch_salary_data(year)
     
@@ -404,8 +409,8 @@ def combine_all_data(year: int = 2025) -> pd.DataFrame:
         
         if pa_col:
             before_count = len(batting)
-            batting = batting[batting[pa_col] >= 200]
-            logger.info(f"Filtered hitters: {before_count} -> {len(batting)} with >= 200 PA (using {pa_col})")
+            batting = batting[batting[pa_col] >= min_pa]
+            logger.info(f"Filtered hitters: {before_count} -> {len(batting)} with >= {min_pa} PA (using {pa_col})")
         else:
             logger.warning("No PA column found - cannot filter by plate appearances")
     

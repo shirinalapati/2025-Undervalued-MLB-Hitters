@@ -40,14 +40,16 @@ _git_sync_done = False
 
 
 def is_enabled() -> bool:
-    return os.environ.get("LIVE_REFRESH_ENABLED", "1").strip().lower() not in (
-        "0", "false", "no", "off",
+    # Default OFF so WSGI hosts (PythonAnywhere) don't hang on git fetch / scrapers.
+    # Local: LIVE_REFRESH_ENABLED=1 python frontend/table_dashboard.py
+    return os.environ.get("LIVE_REFRESH_ENABLED", "0").strip().lower() in (
+        "1", "true", "yes", "on",
     )
 
 
 def git_sync_enabled() -> bool:
-    return os.environ.get("LIVE_GIT_SYNC", "1").strip().lower() not in (
-        "0", "false", "no", "off",
+    return os.environ.get("LIVE_GIT_SYNC", "0").strip().lower() in (
+        "1", "true", "yes", "on",
     )
 
 

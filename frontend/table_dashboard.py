@@ -1905,8 +1905,6 @@ def _validation_tab():
 
 def _warm_cache() -> None:
     """Pre-load both seasons once at startup for fast tab/search switching."""
-    if live_refresh_enabled():
-        pull_latest_committed_data()
     for s in (BENCHMARK_SEASON, CURRENT_SEASON):
         try:
             load_season_data(s)
@@ -1915,9 +1913,13 @@ def _warm_cache() -> None:
 
 
 _warm_cache()
-start_background_scheduler()
 
 if __name__ == "__main__":
+    # Live refresh / git pull only when running the local server — never on WSGI import
+    # (PythonAnywhere reloads hang if we git-fetch or scrape Statcast at worker start).
+    if live_refresh_enabled():
+        pull_latest_committed_data()
+    start_background_scheduler()
     port = int(os.environ.get("PORT", 8050))
     print("\n" + "=" * 60)
     print("Undervalued MLB Hitters Dashboard")

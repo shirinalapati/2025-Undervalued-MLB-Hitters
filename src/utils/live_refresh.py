@@ -64,6 +64,9 @@ def mlb_refresh_interval_seconds() -> int:
 
 
 def poll_interval_ms() -> int:
+    # Don't hammer PythonAnywhere with full page re-renders when live refresh is off
+    if not is_enabled():
+        return 86_400_000  # 24h
     minutes = float(os.environ.get("LIVE_DATA_POLL_MINUTES", "2"))
     return max(int(minutes * 60_000), 60_000)
 

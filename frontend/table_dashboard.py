@@ -1101,7 +1101,23 @@ def update_main_content(top_n, active_tab, season, search_query, _poll_n):
             html.Span("  ·  ", style={"color": "#aaa"}),
             html.Span("Benchmark scores frozen from 2025 Full Season"),
         ])
-        return _validation_tab(), val_title, val_subtitle, val_last_upd, "", ""
+        try:
+            content = _validation_tab()
+        except Exception as exc:
+            logging.exception("Model Validation tab failed")
+            content = dbc.Alert(
+                [
+                    html.Strong("Model Validation failed to render. "),
+                    html.Span(str(exc)),
+                    html.Hr(),
+                    html.Small(
+                        "On PythonAnywhere this is often a missing 2025 CSV or a worker timeout. "
+                        "Check that data/processed/comprehensive_stats_2025.csv exists, then Reload."
+                    ),
+                ],
+                color="danger",
+            )
+        return content, val_title, val_subtitle, val_last_upd, "", ""
 
     try:
         df = load_season_data(season)
@@ -1439,13 +1455,13 @@ def _validation_table(data: pd.DataFrame, columns: list[dict], table_id: str) ->
 
 def _chart_block(title: str, fig: go.Figure, description: str) -> html.Div:
     """HTML title + Plotly chart + plain-language description (titles never clip)."""
-    chart_h = int(fig.layout.height) if fig.layout.height else 420
+    chart_h = int(fig.layout.height) if fig.layout.height else 360
     fig.update_layout(
         title=None,
         autosize=False,
         width=None,
         height=chart_h,
-        margin=dict(t=36, b=90, l=55, r=30),
+        margin=dict(t=28, b=80, l=50, r=24),
         legend=dict(
             orientation="h",
             yanchor="top",
@@ -1453,15 +1469,19 @@ def _chart_block(title: str, fig: go.Figure, description: str) -> html.Div:
             xanchor="center",
             x=0.5,
             bgcolor="rgba(255,255,255,0.85)",
+            font=dict(size=11),
         ),
+        font=dict(size=12),
     )
+    # Keep payload small for PythonAnywhere worker limits
+    fig_dict = fig.to_dict()
     return html.Div([
         html.H5(title, className="mb-2",
                 style={"fontSize": "16px", "fontWeight": "700", "color": "#1a1a1a",
                        "lineHeight": "1.35"}),
         dcc.Graph(
-            figure=fig,
-            config={"displayModeBar": False, "responsive": False},
+            figure=fig_dict,
+            config={"displayModeBar": False, "responsive": False, "staticPlot": False},
             style={"height": f"{chart_h}px", "width": "100%"},
         ),
         html.P(description, style={
@@ -1476,8 +1496,14 @@ def _chart_block(title: str, fig: go.Figure, description: str) -> html.Div:
         "border": "1px solid #e8e8e8",
         "borderRadius": "8px",
         "padding": "16px 16px 18px",
-        # Do NOT use height:100% — Plotly resize + percent height grows forever
     })
+
+
+def _validation_scatter_sample(df: pd.DataFrame, max_points: int = 100) -> pd.DataFrame:
+    """Downsample scatter points so Plotly payloads stay small on PA."""
+    if len(df) <= max_points:
+        return df
+    return df.sample(n=max_points, random_state=42)
 
 
 def _validation_tab():
@@ -1543,47 +1569,52 @@ def _validation_tab():
     )
 
     scatter = cohort.copy()
+    scatter_pts = _validation_scatter_sample(scatter, 100)
     fig_scatter = go.Figure()
     fig_scatter.add_trace(go.Scatter(
-        x=scatter["uvs_2025"],
-        y=scatter["delta_woba"],
+        x=scatter_pts["uvs_2025"],
+        y=scatter_pts["delta_woba"],
         mode="markers",
-        marker=dict(size=7, color=scatter["undervalued_rank"],
-                    colorscale="Viridis", showscale=True,
-                    colorbar=dict(title="2025 rank")),
-        text=scatter["name"],
+        marker=dict(size=6, color="#2980b9", opacity=0.65),
+        customdata=np.column_stack([
+            scatter_pts["name"].astype(str),
+            scatter_pts["undervalued_rank"].to_numpy(),
+        ]),
         hovertemplate=(
-            "%{text}<br>2025 UVS: %{x:.2f}<br>Δ wOBA: %{y:.3f}<extra></extra>"
+            "%{customdata[0]}<br>2025 UVS: %{x:.2f}<br>Δ wOBA: %{y:.3f}"
+            "<br>2025 rank: %{customdata[1]}<extra></extra>"
         ),
         showlegend=False,
     ))
-    if len(scatter) >= 5:
-        z = np.polyfit(scatter["uvs_2025"], scatter["delta_woba"], 1)
-        x_line = np.linspace(scatter["uvs_2025"].min(), scatter["uvs_2025"].max(), 50)
+    fit_df = scatter.dropna(subset=["uvs_2025", "delta_woba"])
+    if len(fit_df) >= 5:
+        z = np.polyfit(fit_df["uvs_2025"], fit_df["delta_woba"], 1)
+        x_line = np.linspace(fit_df["uvs_2025"].min(), fit_df["uvs_2025"].max(), 40)
         fig_scatter.add_trace(go.Scatter(
             x=x_line, y=np.poly1d(z)(x_line),
-            mode="lines", line=dict(color="#e74c3c", dash="dash"),
+            mode="lines", line=dict(color="#e74c3c", dash="dash", width=2),
             name="Linear fit",
         ))
     fig_scatter.add_hline(y=0, line_dash="dot", line_color="#999")
     fig_scatter.update_layout(
         xaxis_title="2025 UVS (z-score composite)",
         yaxis_title="Δ wOBA (2026 − 2025)",
-        height=400,
+        height=360,
         plot_bgcolor="#fafafa",
     )
 
     # 2025 UVS vs 2026 UVS — score stability / talent persistence
     fig_uvs = go.Figure()
     uvs_ok = scatter.dropna(subset=["uvs_2025", "uvs_2026"])
+    uvs_pts = _validation_scatter_sample(uvs_ok, 100)
     fig_uvs.add_trace(go.Scatter(
-        x=uvs_ok["uvs_2025"],
-        y=uvs_ok["uvs_2026"],
+        x=uvs_pts["uvs_2025"],
+        y=uvs_pts["uvs_2026"],
         mode="markers",
-        marker=dict(size=7, color="#1a7340", opacity=0.65),
-        text=uvs_ok["name"],
+        marker=dict(size=6, color="#1a7340", opacity=0.65),
+        customdata=uvs_pts["name"].astype(str),
         hovertemplate=(
-            "%{text}<br>2025 UVS: %{x:.2f}<br>2026 UVS: %{y:.2f}<extra></extra>"
+            "%{customdata}<br>2025 UVS: %{x:.2f}<br>2026 UVS: %{y:.2f}<extra></extra>"
         ),
         name="Hitters",
     ))
@@ -1593,22 +1624,22 @@ def _validation_tab():
         fig_uvs.add_trace(go.Scatter(
             x=[lo, hi], y=[lo, hi],
             mode="lines",
-            line=dict(color="#999", dash="dot"),
+            line=dict(color="#999", dash="dot", width=1),
             name="y = x (perfect persistence)",
         ))
         z_uvs = np.polyfit(uvs_ok["uvs_2025"], uvs_ok["uvs_2026"], 1)
-        x_line = np.linspace(uvs_ok["uvs_2025"].min(), uvs_ok["uvs_2025"].max(), 50)
+        x_line = np.linspace(uvs_ok["uvs_2025"].min(), uvs_ok["uvs_2025"].max(), 40)
         fig_uvs.add_trace(go.Scatter(
             x=x_line, y=np.poly1d(z_uvs)(x_line),
             mode="lines",
-            line=dict(color="#e74c3c", dash="dash"),
+            line=dict(color="#e74c3c", dash="dash", width=2),
             name="Linear fit",
         ))
     corr_uvs = summary.get("corr_uvs_2025_2026")
     fig_uvs.update_layout(
         xaxis_title="2025 UVS",
         yaxis_title="2026 UVS",
-        height=400,
+        height=360,
         plot_bgcolor="#fafafa",
     )
 
@@ -1630,7 +1661,7 @@ def _validation_tab():
         barmode="group",
         xaxis_title="2025 UVS tier",
         yaxis_title="Mean UVS",
-        height=400,
+        height=360,
         plot_bgcolor="#fafafa",
     )
 
@@ -1648,11 +1679,13 @@ def _validation_tab():
     fig_baseline.update_layout(
         xaxis_title="Comparison group",
         yaxis_title="Mean Δ wOBA (2026 − 2025)",
-        height=420,
+        height=380,
         plot_bgcolor="#fafafa",
         xaxis=dict(tickangle=-20),
     )
 
+    fig_delta_woba.update_layout(height=360)
+    fig_wrc.update_layout(height=360)
     # ── Summary cards ───────────────────────────────────────────────────
     top35_delta = summary.get("mean_delta_woba_top35")
     rest_delta = summary.get("mean_delta_woba_rest")

@@ -1,0 +1,45 @@
+name: Refresh 2026 MLB Live Stats (PA / counting)
+
+# Fast MLB Stats API merge — keeps PA/HR/R/RBI current between full Statcast runs.
+on:
+  schedule:
+    - cron: "30 */2 * * *"   # every 2 hours at :30 (offset from full Statcast job)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  mlb-live-merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Ensure base Statcast CSV exists
+        run: |
+          if [ ! -f data/processed/comprehensive_stats_2026.csv ]; then
+            python scripts/fetch_2026_data.py
+          fi
+
+      - name: MLB live stats merge
+        run: python scripts/refresh_mlb_live_stats.py
+
+      - name: Commit and push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f data/processed/comprehensive_stats_2026.csv \
+                  data/processed/last_updated_mlb_live_2026.txt
+          if git diff --cached --quiet; then
+            echo "No PA/counting stat changes."
+            exit 0
+          fi
+          git commit -m "chore: MLB live PA/counting refresh [$(date -u '+%Y-%m-%d %H:%M UTC')]"
+          git push

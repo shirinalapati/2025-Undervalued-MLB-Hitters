@@ -7,4 +7,9 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
-
+      - key: LIVE_REFRESH_ENABLED
+        value: "1"
+      - key: LIVE_REFRESH_HOURS
+        value: "6"
+      - key: LIVE_DATA_POLL_MINUTES
+        value: "5"

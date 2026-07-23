@@ -1,11 +1,12 @@
 name: Update 2026 Live Season Data
 
-# Daily refresh + evening catch-up during the regular season.
-# Also runs when triggered manually from the Actions tab.
+# Near-live during the regular season: 4× daily + morning/evening game catch-ups.
 on:
   schedule:
-    - cron: "0 13 * * *"   # 9:00 AM ET
-    - cron: "0 3 * * *"    # 11:00 PM ET (previous day)
+    - cron: "0 7 * * *"    # ~3:00 AM ET — overnight games
+    - cron: "0 13 * * *"   # ~9:00 AM ET
+    - cron: "0 19 * * *"   # ~3:00 PM ET
+    - cron: "0 1 * * *"    # ~9:00 PM ET — same-day games
   workflow_dispatch:
 
 permissions:

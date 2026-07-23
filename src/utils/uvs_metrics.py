@@ -176,7 +176,7 @@ def calculate_se(df: pd.DataFrame) -> pd.Series:
     # If not available, calculate it
     if (war_per_salary == 0).all() or war_per_salary.isna().all():
         war = get_column(df, ['WAR', 'war'])
-        salary = get_column(df, ['salary_2025', 'salary_2025_x', 'salary_2025_y'], default=np.inf)
+        salary = get_column(df, ['salary_2026', 'salary_2025', 'salary_2025_x', 'salary_2025_y'], default=np.inf)
         war_per_salary = war / (salary + 0.1)  # Add small value to avoid division by zero
     
     # Calculate z-score

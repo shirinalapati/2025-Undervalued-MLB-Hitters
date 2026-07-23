@@ -71,7 +71,12 @@ def load_validation_cohort(
     }
     base = base.rename(columns={k: v for k, v in rename_25.items() if k in base.columns})
 
-    follow = df26[["player_id", "woba", "wrc_plus", "war", "pa", "uvs"]].rename(
+    follow_cols = ["player_id", "woba", "wrc_plus", "war", "pa", "uvs"]
+    follow_cols = [c for c in follow_cols if c in df26.columns]
+    if "player_id" not in follow_cols:
+        return pd.DataFrame()
+
+    follow = df26[follow_cols].rename(
         columns={
             "woba": "woba_2026",
             "wrc_plus": "wrc_plus_2026",
@@ -81,6 +86,11 @@ def load_validation_cohort(
         }
     )
     follow = follow.drop_duplicates(subset=["player_id"], keep="first")
+
+    # Required follow-up fields for the validation charts
+    required = {"player_id", "woba_2026", "pa_2026"}
+    if not required.issubset(follow.columns) or "woba_2025" not in base.columns:
+        return pd.DataFrame()
 
     merged = base.merge(follow, on="player_id", how="inner")
     if min_pa_2026 > 0 and "pa_2026" in merged.columns:

@@ -6,6 +6,10 @@ on:
     - cron: "30 */2 * * *"   # every 2 hours at :30 (offset from full Statcast job)
   workflow_dispatch:
 
+concurrency:
+  group: mlb-live-stats-2026
+  cancel-in-progress: false
+
 permissions:
   contents: write
 

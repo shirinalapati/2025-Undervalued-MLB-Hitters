@@ -8,8 +8,10 @@ services:
       - key: PYTHON_VERSION
         value: 3.11.0
       - key: LIVE_REFRESH_ENABLED
+        value: "0"
+      - key: LIVE_GIT_SYNC
         value: "1"
-      - key: LIVE_REFRESH_HOURS
-        value: "6"
+      - key: LIVE_GIT_SYNC_MINUTES
+        value: "3"
       - key: LIVE_DATA_POLL_MINUTES
-        value: "5"
+        value: "2"

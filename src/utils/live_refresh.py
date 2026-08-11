@@ -37,6 +37,7 @@ _last_mlb_refresh_utc: datetime | None = None
 _last_mlb_refresh_ok: bool | None = None
 _scheduler_started = False
 _git_sync_done = False
+_last_git_sync_attempt = 0.0
 
 
 def is_enabled() -> bool:
@@ -48,8 +49,9 @@ def is_enabled() -> bool:
 
 
 def git_sync_enabled() -> bool:
-    return os.environ.get("LIVE_GIT_SYNC", "0").strip().lower() in (
-        "1", "true", "yes", "on",
+    # Default ON — production (PythonAnywhere/Render) pulls CSV commits from GitHub Actions.
+    return os.environ.get("LIVE_GIT_SYNC", "1").strip().lower() not in (
+        "0", "false", "no", "off",
     )
 
 
@@ -64,9 +66,6 @@ def mlb_refresh_interval_seconds() -> int:
 
 
 def poll_interval_ms() -> int:
-    # Don't hammer PythonAnywhere with full page re-renders when live refresh is off
-    if not is_enabled():
-        return 86_400_000  # 24h
     minutes = float(os.environ.get("LIVE_DATA_POLL_MINUTES", "2"))
     return max(int(minutes * 60_000), 60_000)
 
@@ -93,6 +92,11 @@ def _git_remote() -> str | None:
     return None
 
 
+def git_sync_interval_seconds() -> int:
+    minutes = float(os.environ.get("LIVE_GIT_SYNC_MINUTES", "3"))
+    return max(int(minutes * 60), 60)
+
+
 def pull_latest_committed_data() -> bool:
     if not git_sync_enabled() or not (PROJECT_ROOT / ".git").exists():
         return False
@@ -108,6 +112,7 @@ def pull_latest_committed_data() -> bool:
             timeout=90,
         )
         if fetch.returncode != 0:
+            log.debug("git fetch failed: %s", (fetch.stderr or fetch.stdout or "")[-300:])
             return False
         checkout = subprocess.run(
             [
@@ -121,13 +126,26 @@ def pull_latest_committed_data() -> bool:
             text=True,
             timeout=30,
         )
-        if checkout.returncode == 0 and DATA_TS.exists():
+        if checkout.returncode == 0 and DATA_CSV.exists():
             log.info("Synced 2026 data from %s/main", remote)
             return True
+        log.debug("git checkout failed: %s", (checkout.stderr or checkout.stdout or "")[-300:])
         return False
     except Exception as exc:
         log.debug("git sync failed: %s", exc)
         return False
+
+
+def sync_data_from_git() -> bool:
+    """Throttled git pull of committed CSV updates (safe on WSGI / PythonAnywhere)."""
+    global _last_git_sync_attempt
+    if not git_sync_enabled():
+        return False
+    now = time.time()
+    if now - _last_git_sync_attempt < git_sync_interval_seconds():
+        return False
+    _last_git_sync_attempt = now
+    return pull_latest_committed_data()
 
 
 def _run_script(script: Path, label: str) -> bool:
@@ -244,13 +262,18 @@ def mlb_refresh_interval_label() -> str:
 
 
 def refresh_status_label() -> str:
-    if not is_enabled():
+    parts = []
+    if git_sync_enabled():
+        parts.append(f"Git sync every {git_sync_interval_seconds() // 60}m")
+    if is_enabled():
+        parts.extend([
+            f"PA scrape every {mlb_refresh_interval_label()}",
+            f"Statcast every {refresh_interval_label()}",
+        ])
+        if _last_mlb_refresh_utc and _last_mlb_refresh_ok:
+            parts.append(f"PA @ {_last_mlb_refresh_utc.strftime('%H:%M UTC')} ✓")
+        if _last_full_refresh_utc and _last_full_refresh_ok:
+            parts.append(f"adv @ {_last_full_refresh_utc.strftime('%H:%M UTC')} ✓")
+    elif not parts:
         return "manual refresh only"
-    mlb = mlb_refresh_interval_label()
-    full = refresh_interval_label()
-    parts = [f"PA live every {mlb}", f"Statcast every {full}"]
-    if _last_mlb_refresh_utc and _last_mlb_refresh_ok:
-        parts.append(f"PA @ {_last_mlb_refresh_utc.strftime('%H:%M UTC')} ✓")
-    if _last_full_refresh_utc and _last_full_refresh_ok:
-        parts.append(f"adv @ {_last_full_refresh_utc.strftime('%H:%M UTC')} ✓")
     return " · ".join(parts)

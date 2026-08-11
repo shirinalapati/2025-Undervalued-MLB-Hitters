@@ -50,6 +50,7 @@ _SEASON_CACHE: dict[int, tuple[float, pd.DataFrame]] = {}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 from src.utils.live_refresh import (  # noqa: E402
+    git_sync_enabled,
     is_enabled as live_refresh_enabled,
     mlb_refresh_interval_label,
     poll_interval_ms,
@@ -58,6 +59,7 @@ from src.utils.live_refresh import (  # noqa: E402
     refresh_interval_seconds,
     refresh_status_label,
     start_background_scheduler,
+    sync_data_from_git,
 )
 from src.utils.uvs_validation import (  # noqa: E402
     build_baseline_comparison,
@@ -159,6 +161,13 @@ def load_season_data(season: int) -> pd.DataFrame:
 
     _SEASON_CACHE[season] = (mtime, df.copy())
     return df.copy()
+
+
+def _invalidate_season_cache(season: int | None = None) -> None:
+    if season is None:
+        _SEASON_CACHE.clear()
+    else:
+        _SEASON_CACHE.pop(season, None)
 
 
 def _fill_missing_columns(df: pd.DataFrame, season: int) -> pd.DataFrame:
@@ -1030,6 +1039,10 @@ def update_main_content(top_n, active_tab, season, search_query, _poll_n):
     season = coerce_season(season)
     top_n  = top_n or MAX_PLAYERS_2025
 
+    if season == CURRENT_SEASON and git_sync_enabled():
+        if sync_data_from_git():
+            _invalidate_season_cache(CURRENT_SEASON)
+
     title = (
         "Live Undervalued MLB Hitters Analysis"
         if season == CURRENT_SEASON
@@ -1049,7 +1062,7 @@ def update_main_content(top_n, active_tab, season, search_query, _poll_n):
         html.Span("Last updated: ", style={"fontWeight": "600"}),
         html.Span(lu),
     ]
-    if season == CURRENT_SEASON and live_refresh_enabled():
+    if season == CURRENT_SEASON and (live_refresh_enabled() or git_sync_enabled()):
         last_upd_parts.extend([
             html.Span("  ·  ", style={"color": "#aaa"}),
             html.Span(

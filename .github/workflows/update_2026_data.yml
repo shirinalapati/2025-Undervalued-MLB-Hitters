@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: statcast-full-2026
+  group: hitters-2026-data
   cancel-in-progress: false
 
 permissions:
@@ -53,4 +53,5 @@ jobs:
             exit 0
           fi
           git commit -m "chore: auto-update 2026 hitter data [$(date -u '+%Y-%m-%d %H:%M UTC')]"
-          git push
+          git pull --rebase origin main
+          git push origin main

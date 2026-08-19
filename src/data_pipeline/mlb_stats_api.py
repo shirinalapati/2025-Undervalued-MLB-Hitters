@@ -8,12 +8,71 @@ while Statcast advanced metrics refresh on a slower schedule.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 log = logging.getLogger(__name__)
+
+_RETRYABLE = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+    requests.exceptions.ChunkedEncodingError,
+)
+
+
+def _session() -> requests.Session:
+    session = requests.Session()
+    session.headers.update(
+        {
+            "User-Agent": (
+                "undervalued-mlb-hitters/1.0 "
+                "(+https://github.com/shirinalapati/2025-Undervalued-MLB-Hitters)"
+            ),
+            "Accept": "application/json",
+        }
+    )
+    retry = Retry(
+        total=5,
+        connect=5,
+        read=5,
+        backoff_factor=1.5,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["GET"]),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+_SESSION = _session()
+
+
+def _get(url: str, *, params: dict[str, Any] | None = None, timeout: int = 90) -> requests.Response:
+    last_exc: Exception | None = None
+    for attempt in range(1, 6):
+        try:
+            resp = _SESSION.get(url, params=params, timeout=timeout)
+            resp.raise_for_status()
+            return resp
+        except _RETRYABLE as exc:
+            last_exc = exc
+            wait = min(2**attempt, 30)
+            log.warning(
+                "MLB Stats API request failed (attempt %d/5): %s — retrying in %ss",
+                attempt,
+                exc,
+                wait,
+            )
+            time.sleep(wait)
+    assert last_exc is not None
+    raise last_exc
 
 MLB_STATS_URL = "https://statsapi.mlb.com/api/v1/stats"
 MLB_PEOPLE_URL = "https://statsapi.mlb.com/api/v1/people"
@@ -87,8 +146,7 @@ def fetch_season_hitting(season: int, sport_id: int = 1) -> pd.DataFrame:
             "limit": page_size,
             "offset": offset,
         }
-        resp = requests.get(MLB_STATS_URL, params=params, timeout=60)
-        resp.raise_for_status()
+        resp = _get(MLB_STATS_URL, params=params, timeout=60)
         payload = resp.json()
         stats = payload.get("stats") or []
         if not stats:
@@ -140,12 +198,11 @@ def fetch_hitting_for_player_ids(
 
     for i in range(0, len(ids), PEOPLE_BATCH_SIZE):
         batch = ids[i : i + PEOPLE_BATCH_SIZE]
-        resp = requests.get(
+        resp = _get(
             MLB_PEOPLE_URL,
             params={"personIds": ",".join(str(x) for x in batch), "hydrate": hydrate},
             timeout=90,
         )
-        resp.raise_for_status()
         for person in resp.json().get("people") or []:
             pid = person.get("id")
             if pid is None:

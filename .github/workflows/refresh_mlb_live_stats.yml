@@ -17,9 +17,9 @@ jobs:
   mlb-live-merge:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -33,7 +33,13 @@ jobs:
           fi
 
       - name: MLB live stats merge
-        run: python scripts/refresh_mlb_live_stats.py
+        run: |
+          for i in 1 2 3; do
+            python scripts/refresh_mlb_live_stats.py && exit 0
+            echo "MLB live merge attempt $i failed; retrying…"
+            sleep $((i * 25))
+          done
+          exit 1
 
       - name: Commit and push
         run: |
